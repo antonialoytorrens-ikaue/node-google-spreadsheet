@@ -1,5 +1,5 @@
 import Axios, {
-  AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig,
+  AxiosError, AxiosInstance, AxiosResponse, AxiosRequestConfig,
 } from 'axios';
 
 import { Stream } from 'stream';
@@ -115,29 +115,28 @@ export class GoogleSpreadsheet {
     this._rawSheets = {};
     this._spreadsheetUrl = null;
 
-    // create an axios instance with sheet root URL and interceptors to handle auth
     this.sheetsApi = Axios.create({
-      baseURL: `${SHEETS_API_BASE_URL}/${spreadsheetId}`,
-      paramsSerializer: axiosParamsSerializer,
-      // removing limits in axios for large requests
-      // https://stackoverflow.com/questions/56868023/error-request-body-larger-than-maxbodylength-limit-when-sending-base64-post-req
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
+        baseURL: `${SHEETS_API_BASE_URL}/${spreadsheetId}`,
+        headers: {}, // Ensure headers object is initialized
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
     });
+
     this.driveApi = Axios.create({
-      baseURL: `${DRIVE_API_BASE_URL}/${spreadsheetId}`,
-      paramsSerializer: axiosParamsSerializer,
+        baseURL: `${DRIVE_API_BASE_URL}/${spreadsheetId}`,
+        headers: {}, // Ensure headers object is initialized
     });
-    // have to use bind here or the functions dont have access to `this` :(
+
+    // Binding `this` context to ensure that instance methods have access to class properties
     this.sheetsApi.interceptors.request.use(this._setAxiosRequestAuth.bind(this));
     this.sheetsApi.interceptors.response.use(
-      this._handleAxiosResponse.bind(this),
-      this._handleAxiosErrors.bind(this)
+        this._handleAxiosResponse.bind(this),
+        this._handleAxiosErrors.bind(this)
     );
     this.driveApi.interceptors.request.use(this._setAxiosRequestAuth.bind(this));
     this.driveApi.interceptors.response.use(
-      this._handleAxiosResponse.bind(this),
-      this._handleAxiosErrors.bind(this)
+        this._handleAxiosResponse.bind(this),
+        this._handleAxiosErrors.bind(this)
     );
   }
 
@@ -147,37 +146,41 @@ export class GoogleSpreadsheet {
   // INTERNAL UTILITY FUNCTIONS ////////////////////////////////////////////////////////////////////
 
   /** @internal */
-  async _setAxiosRequestAuth(config: InternalAxiosRequestConfig) {
+  async _setAxiosRequestAuth(config: AxiosRequestConfig): Promise<AxiosRequestConfig> {
     const authConfig = await getRequestAuthConfig(this.auth);
-    _.each(authConfig.headers, (val, key) => {
-      config.headers.set(key, val);
-    });
+    // Ensure headers object is defined
+    config.headers = { ...config.headers, ...authConfig.headers };
+
+    // Merge additional parameters
     config.params = { ...config.params, ...authConfig.params };
     return config;
   }
+
 
   /** @internal */
   async _handleAxiosResponse(response: AxiosResponse) { return response; }
   /** @internal */
   async _handleAxiosErrors(error: AxiosError) {
-    // console.log(error);
-    const errorData = error.response?.data as any;
+    if (error.response) {
+        const errorData = error.response.data as any; // Use 'any' to bypass the type checking
 
-    if (errorData) {
-      // usually the error has a code and message, but occasionally not
-      if (!errorData.error) throw error;
-
-      const { code, message } = errorData.error;
-      error.message = `Google API error - [${code}] ${message}`;
-      throw error;
+        // Check if the error object exists in the response data
+        if (errorData.error && typeof errorData.error === 'object') {
+            const code = errorData.error.code as number; // Assert 'code' as number
+            const message = errorData.error.message as string; // Assert 'message' as string
+            error.message = `Google API error - [${code}] ${message}`;
+            throw error; // Re-throw the error with the modified message
+        }
     }
 
-    if (_.get(error, 'response.status') === 403) {
-      if ('apiKey' in this.auth) {
-        throw new Error('Sheet is private. Use authentication or make public. (see https://github.com/theoephraim/node-google-spreadsheet#a-note-on-authentication for details)');
-      }
+    // Check for a 403 status which might not include the custom error structure
+    if (error.response?.status === 403) {
+        if ('apiKey' in this.auth) {
+            throw new Error('Sheet is private. Use authentication or make public. (see https://github.com/theoephraim/node-google-spreadsheet#a-note-on-authentication for details)');
+        }
     }
-    throw error;
+
+    throw error; // Ensure all other errors are rethrown if not specifically handled
   }
 
   /** @internal */
